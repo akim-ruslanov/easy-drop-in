@@ -1,0 +1,6 @@
+services:
+  easy-drop-in:
+    build: .
+    ports:
+      - "8787:8787"
+      - "5173:5173"

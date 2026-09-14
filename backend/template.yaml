@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Easy Drop-In backend proxy for Vancouver community centre calendars
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Runtime: nodejs20.x
+
+Resources:
+  # Single tiny JSON object shared between Lambda instances so a cold start
+  # reuses the last merged feed instead of refetching every calendar.
+  # Usage is a handful of GETs/PUTs per hour, far inside the S3 free tier.
+  FeedCacheBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireStaleCache
+            Status: Enabled
+            ExpirationInDays: 7
+
+  EventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: index.handler
+      Environment:
+        Variables:
+          SPORTS_CALENDARS: 46,10,9,15,11,49,5
+          CACHE_BUCKET: !Ref FeedCacheBucket
+          CACHE_KEY: feed.json
+          # 30 min: caps S3 writes at ~1,440/month (free tier: 2,000 PUT).
+          FEED_TTL_MS: '1800000'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub '${FeedCacheBucket.Arn}/*'
+      Events:
+        GetEvents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /events
+            Method: get
+        GetSpots:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /spots
+            Method: get
+
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the events API
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com/events'
