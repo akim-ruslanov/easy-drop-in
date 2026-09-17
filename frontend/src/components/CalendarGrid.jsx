@@ -153,6 +153,8 @@ export default function CalendarGrid({ events, weekStart, onPrev, onNext, onToda
                   const top = ((startMin - MIN) / 60) * ROW_HEIGHT;
                   const height = Math.max(((endMin - startMin) / 60) * ROW_HEIGHT, 22);
                   const colour = COLOURS[event.sport || event.calendarName] || FALLBACK;
+                  const opensAt = event.registrationOpens ? parseTime(event.registrationOpens) : null;
+                  const regPending = opensAt && opensAt > new Date();
                   return (
                     <button
                       key={`${event.id}-${event.start}`}
@@ -170,11 +172,16 @@ export default function CalendarGrid({ events, weekStart, onPrev, onNext, onToda
                         {formatTime(parseTime(event.start))} {event.title}
                       </div>
                       <div className="truncate text-[10px] leading-tight opacity-70">
-                        {event.openSpots === 0
-                          ? 'Full · '
-                          : event.openSpots > 0
-                            ? `${event.openSpots} spot${event.openSpots === 1 ? '' : 's'} · `
-                            : ''}
+                        {regPending
+                          ? `Reg. opens ${opensAt.toLocaleDateString('en-CA', {
+                              month: 'short',
+                              day: 'numeric',
+                            })} · `
+                          : event.openSpots === 0
+                            ? 'Full · '
+                            : event.openSpots > 0
+                              ? `${event.openSpots} spot${event.openSpots === 1 ? '' : 's'} · `
+                              : ''}
                         {event.centerName}
                       </div>
                     </button>

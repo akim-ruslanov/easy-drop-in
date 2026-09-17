@@ -4,7 +4,7 @@ A single calendar of drop-in sports across Vancouver community centres, backed b
 
 ## Structure
 
-- `frontend/` — React + Tailwind static site (Vite). Week calendar grid + list view, text search, sport filter, age-group filter, open-spots filter, centre filter (text search + "near me" via geolocation or a typed location, distance sort + radius), sign-up links, "add to calendar" (.ics).
+- `frontend/` — React + Tailwind static site (Vite). Week calendar grid + list view, text search, sport filter, age-group filter, open-spots filter, centre filter (text search + "near me" via geolocation or a typed location, distance sort + radius), sign-up links, and a global "Add to: Google Calendar / .ics file" toggle (Google is the default) that applies to both "add event" and "remind me when registration opens" actions.
 - `backend/` — Node proxy for the ActiveNet API (AWS Lambda + API Gateway). Merges 7 sports calendars across all 24 centres into one feed and returns centre metadata (address + coordinates) plus per-event age group. Open-spot counts are served separately by `/spots` on demand.
 
 The ActiveNet API requires a server-side session cookie and a per-session CSRF token, so the browser cannot call it directly. The backend primes a session, fetches each sports calendar, and returns one slimmed, merged list.
@@ -64,7 +64,7 @@ Add the API Gateway base URL as a repo secret `VITE_API_URL` (e.g. `https://abc1
 - ANC's calendars are not sport-homogeneous (the `Sports: Basketball` calendar also lists tennis lessons, Zumba, volleyball, etc.), so `backend/anc.mjs` classifies each event into a sport group from its title and the UI filters on that `sport` field.
 - Sports calendars include both drop-in and registered programs. Prices (when present) are shown on each event.
 - Centre coordinates are hardcoded in `backend/centres.mjs` (geocoded once); "near me" uses browser geolocation or a typed location (geocoded via the backend's `/geocode` endpoint, backed by OpenStreetMap Nominatim). Geolocation requires a secure context (localhost or HTTPS).
-- Open spots come from the per-activity detail endpoint. Rather than fetching all ~700 upfront, the frontend asks `GET /spots?items=<id>~<date>,…` only for the events on screen; the backend caches each result for 5 minutes and fetches up to 16 at a time.
+- Open spots come from the per-activity detail endpoint. Rather than fetching all ~700 upfront, the frontend asks `GET /spots?items=<id>~<date>,…` only for the events on screen; the backend caches each result for 5 minutes and fetches up to 16 at a time. The same response carries `registrationOpens` (the online registration open datetime), which drives the reminder option.
 - The merged feed is cached in S3 (single object, `FEED_TTL_MS`, default 30 min) so a Lambda cold start reuses it instead of refetching every calendar. Locally it falls back to `backend/.cache/feed.json`. With one tiny object and at most one GET per cold start and one PUT per rebuild, usage stays inside the AWS free tier: S3 (5 GB, 20,000 GET, 2,000 PUT/month for 12 months) and Lambda (1M requests, 400,000 GB-s/month). Raise `FEED_TTL_MS` if PUTs ever approach the limit.
 
 ## TODO

@@ -147,6 +147,31 @@ function parseOpenSpots(spaceStatus) {
   return null;
 }
 
+// The datetime online registration opens, taken from the activity detail. ANC
+// exposes it under enrollment_datetimes (and, less commonly, the priority
+// buckets). Events with an opening but a future registration date get a
+// "remind me" calendar entry instead of a sign-up link.
+function parseRegistrationOpens(detail) {
+  const dates = detail && detail.meeting_and_registration_dates;
+  if (!dates) return null;
+
+  const values = [];
+  const collect = (d) => {
+    if (!d) return;
+    for (const key of ['first_daytime_internet', 'drop_in_first_daytime_internet']) {
+      if (d[key]) values.push(d[key]);
+    }
+  };
+  for (const d of dates.enrollment_datetimes || []) collect(d);
+  if (!values.length) {
+    collect(dates.priority_enrollment_datetimes);
+    collect(dates.local_priority_enrollment_datetimes);
+  }
+  if (!values.length) return null;
+  values.sort();
+  return values[0];
+}
+
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;
@@ -321,9 +346,13 @@ export async function getSpots(items) {
     const fetched = await mapWithConcurrency(missing, SPOTS_CONCURRENCY, async (id) => {
       try {
         const detail = await getActivityDetail(session, id, unique.get(id));
-        return { openSpots: parseOpenSpots(detail.space_status), spaceStatus: detail.space_status || '' };
+        return {
+          openSpots: parseOpenSpots(detail.space_status),
+          spaceStatus: detail.space_status || '',
+          registrationOpens: parseRegistrationOpens(detail),
+        };
       } catch {
-        return { openSpots: null, spaceStatus: '' };
+        return { openSpots: null, spaceStatus: '', registrationOpens: null };
       }
     });
 

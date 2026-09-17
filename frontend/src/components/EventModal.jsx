@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { parseTime, formatTime, formatDayHeader } from '../lib/dates';
-import { downloadIcs } from '../lib/calendar';
+import { parseTime, formatTime, formatDayHeader, formatDateTime } from '../lib/dates';
+import { addEventToCalendar, addRegistrationReminder } from '../lib/calendar';
 import SpotsBadge from './SpotsBadge';
 
-export default function EventModal({ event, onClose }) {
+export default function EventModal({ event, calendarMode = 'google', onClose }) {
   useEffect(() => {
     if (!event) return;
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -15,6 +15,8 @@ export default function EventModal({ event, onClose }) {
 
   const start = parseTime(event.start);
   const end = parseTime(event.end);
+  const opens = event.registrationOpens ? parseTime(event.registrationOpens) : null;
+  const registrationPending = opens && opens > new Date();
 
   return (
     <div
@@ -57,26 +59,44 @@ export default function EventModal({ event, onClose }) {
           )}
         </div>
 
+        {registrationPending && (
+          <p className="mt-2 text-sm font-medium text-amber-600">
+            Registration opens {formatDateTime(opens)}.
+          </p>
+        )}
+
         {event.description && (
           <p className="mt-3 whitespace-pre-wrap text-sm text-gray-600">{event.description}</p>
         )}
 
-        <div className="mt-4 flex gap-2">
+        <div className="mt-4 flex flex-wrap gap-2">
           {event.url && (
             <a
               href={event.url}
               target="_blank"
               rel="noreferrer"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className={`rounded-md px-4 py-2 text-sm font-medium text-white ${
+                registrationPending ? 'bg-blue-400 hover:bg-blue-500' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
               Sign up
             </a>
           )}
+          {registrationPending && (
+            <button
+              onClick={() => addRegistrationReminder(event, opens, calendarMode)}
+              className="rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600"
+            >
+              {calendarMode === 'google'
+                ? 'Remind me when registration opens'
+                : 'Download reminder (.ics)'}
+            </button>
+          )}
           <button
-            onClick={() => downloadIcs(event)}
+            onClick={() => addEventToCalendar(event, calendarMode)}
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            Add to calendar
+            {calendarMode === 'google' ? 'Add event to Google Calendar' : 'Download event (.ics)'}
           </button>
         </div>
       </div>

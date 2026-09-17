@@ -38,6 +38,15 @@ export function formatTime(date) {
   return date.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' });
 }
 
+export function formatDateTime(date) {
+  return date.toLocaleString('en-CA', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function formatDayHeader(date) {
   const today = new Date();
   const tomorrow = addDays(today, 1);

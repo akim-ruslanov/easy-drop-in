@@ -27,6 +27,7 @@ export default function App() {
   const [radiusKm, setRadiusKm] = useState(5);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [spots, setSpots] = useState({});
+  const [calendarMode, setCalendarMode] = useState('google');
   const spotsInFlight = useRef(new Set());
 
   useEffect(() => {
@@ -56,7 +57,14 @@ export default function App() {
     if (!Object.keys(spots).length) return events;
     return events.map((e) => {
       const s = spots[e.id];
-      return s ? { ...e, openSpots: s.openSpots, spaceStatus: s.spaceStatus } : e;
+      return s
+        ? {
+            ...e,
+            openSpots: s.openSpots,
+            spaceStatus: s.spaceStatus,
+            registrationOpens: s.registrationOpens,
+          }
+        : e;
     });
   }, [data, spots]);
 
@@ -289,19 +297,43 @@ export default function App() {
               Open spots only
             </label>
 
-            {view === 'list' && (
-              <select
-                value={range}
-                onChange={(e) => setRange(e.target.value)}
-                className="ml-auto rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600"
-              >
-                {Object.entries(RANGES).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            )}
+            <div className="ml-auto flex items-center gap-2">
+              {view === 'list' && (
+                <select
+                  value={range}
+                  onChange={(e) => setRange(e.target.value)}
+                  className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600"
+                >
+                  {Object.entries(RANGES).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400">Add to:</span>
+                <div className="flex rounded-lg border border-gray-300 p-0.5">
+                  <button
+                    onClick={() => setCalendarMode('google')}
+                    className={`rounded-md px-2 py-1 text-xs font-medium ${
+                      calendarMode === 'google' ? 'bg-blue-600 text-white' : 'text-gray-600'
+                    }`}
+                  >
+                    Google Calendar
+                  </button>
+                  <button
+                    onClick={() => setCalendarMode('ics')}
+                    className={`rounded-md px-2 py-1 text-xs font-medium ${
+                      calendarMode === 'ics' ? 'bg-blue-600 text-white' : 'text-gray-600'
+                    }`}
+                  >
+                    .ics file
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </header>
@@ -342,7 +374,7 @@ export default function App() {
                 </h2>
                 <div className="space-y-2">
                   {dayEvents.map((e) => (
-                    <EventRow key={`${e.id}-${e.start}`} event={e} />
+                    <EventRow key={`${e.id}-${e.start}`} event={e} calendarMode={calendarMode} />
                   ))}
                 </div>
               </section>
@@ -360,7 +392,11 @@ export default function App() {
         Data from the City of Vancouver community centre calendars.
       </footer>
 
-      <EventModal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      <EventModal
+        event={selectedEvent}
+        calendarMode={calendarMode}
+        onClose={() => setSelectedEvent(null)}
+      />
     </div>
   );
 }

@@ -169,6 +169,10 @@ call, and parses JSON. Throws a descriptive error on non-2xx.
   Anything unmatched becomes `Sports: Other`.
 - `parseOpenSpots` — turns `"8 openings remaining"` into `8`, `"Full"` into `0`,
   else `null`.
+- `parseRegistrationOpens` — reads
+  `meeting_and_registration_dates.enrollment_datetimes[*].first_daytime_internet`
+  (falling back to the priority buckets) and returns the earliest online
+  registration-open datetime, or `null`. Drives the "remind me" feature.
 
 #### `slimEvent` (lines 163–178)
 
@@ -209,7 +213,8 @@ Invoked by `/spots`. Input is a list of `{ id, date }` pairs. It:
 2. Serves any entries from the in-memory `cachedSpots` map.
 3. Fetches the rest concurrently (`mapWithConcurrency`, limit 16) via
    `GET /onlinecalendar/activity-details/{id}?selected_date=...`.
-4. Caches each result for `SPOTS_TTL_MS` and returns `{ [id]: { openSpots, spaceStatus } }`.
+4. Caches each result for `SPOTS_TTL_MS` and returns
+   `{ [id]: { openSpots, spaceStatus, registrationOpens } }`.
 
 Failure to fetch one activity yields `{ openSpots: null, spaceStatus: '' }`
 rather than failing the whole request.
@@ -292,11 +297,14 @@ All responses are JSON. CORS is open (`*`).
 ```json
 {
   "spots": {
-    "620746": { "openSpots": 0, "spaceStatus": "Full" },
-    "620747": { "openSpots": 8, "spaceStatus": "8 openings remaining" }
+    "620746": { "openSpots": 0, "spaceStatus": "Full", "registrationOpens": null },
+    "620747": { "openSpots": 8, "spaceStatus": "8 openings remaining", "registrationOpens": "2026-09-18 12:00:00" }
   }
 }
 ```
+
+`registrationOpens` is the online registration-open datetime (naive local time),
+or `null` when registration is already open or unavailable.
 
 ### `GET /geocode?q=<address>`
 
@@ -342,9 +350,10 @@ All application state is in this one component. Key pieces:
 
 **State.** Filter inputs (`query`, `sport`, `ageGroup`, `openSpotsOnly`,
 `range`), view/navigation (`view`, `weekStart`), centre/location selection,
-`selectedEvent` for the modal, and `spots` — a map of activity id -> spot info
-loaded lazily. `spotsInFlight` is a `useRef(Set)` used to dedupe concurrent
-requests without triggering re-renders.
+`selectedEvent` for the modal, `calendarMode` (`'google'` default, or `'ics'`),
+and `spots` — a map of activity id -> spot info loaded lazily. `spotsInFlight`
+is a `useRef(Set)` used to dedupe concurrent requests without triggering
+re-renders.
 
 **Derived data (a pipeline of `useMemo`s).** Read it top to bottom:
 
@@ -385,9 +394,12 @@ API; `setLocationByText` calls the backend `/geocode`.
 - **`CalendarGrid`** — a week grid. `layoutDay` runs an interval-overlap
   algorithm to place concurrent events side by side in columns. Colour is chosen
   from `COLOURS` keyed by `event.sport` (falling back to `calendarName`).
-- **`EventRow`** — list row: time, title, spot badge, price, location line,
-  expandable description, sign-up link, and "add to calendar".
-- **`EventModal`** — details for a clicked calendar event.
+- **`EventRow`** — list row: time, title, spot badge, price, location line, an
+  amber "registration opens …" note when applicable, expandable description,
+  sign-up link, a "Remind me" button, and an "add to calendar" button. Button
+  behaviour follows the global `calendarMode`.
+- **`EventModal`** — details for a clicked calendar event, including the
+  registration-open note and reminder button.
 - **`SpotsBadge`** — renders "N spots" / "Full", or nothing when data is absent.
 - **`CentreFilter`** — the dropdown: centre search, "use my location", a typed
   location, radius selector, distance-sorted list, All/None.
@@ -397,7 +409,20 @@ API; `setLocationByText` calls the backend `/geocode`.
 - `dates.js` — parsing ANC's naive datetime strings (`replace(' ', 'T')`),
   week/day math, and locale formatting (`en-CA`).
 - `geo.js` — `haversineKm` and distance formatting.
-- `calendar.js` — builds an `.ics` file client-side and triggers a download.
+- `calendar.js` — client-side calendar actions. `googleCalendarUrl({ title,
+  start, end, details, location })` builds a pre-filled Google Calendar compose
+  URL (datetimes converted to UTC `YYYYMMDDTHHMMSSZ`). `addEventToCalendar(event,
+  mode)` and `addRegistrationReminder(event, opensAt, mode)` dispatch on `mode`:
+  `'google'` (default) opens the URL in a new tab; `'ics'` downloads a file via
+  `downloadIcs` / `downloadRegistrationReminder`. The reminder variant is a
+  15-minute block (with a 10-minute VALARM) at the registration-open time.
+- The global `calendarMode` state (default `'google'`) lives in `App.jsx` and is
+  passed down to `EventRow` and `EventModal`; the header segmented control
+  toggles it.
+- Registration-open datetimes flow: `parseRegistrationOpens` (backend) →
+  `/spots` → merged onto the event in `App.jsx` as `registrationOpens` → compared
+  against `new Date()` in the components; if it is in the future the reminder UI
+  is shown, otherwise the normal sign-up flow applies.
 
 ---
 
