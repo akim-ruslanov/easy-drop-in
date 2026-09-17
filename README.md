@@ -47,6 +47,22 @@ docker build --build-arg VITE_API_URL=https://your-api.execute-api.us-west-2.ama
 
 ### Backend (AWS)
 
+One-time bootstrap of the CI deploy role. This creates the GitHub OIDC provider (if missing), the `easy-drop-in-deploy` IAM role scoped to this repo/branch, and its permissions:
+
+```bash
+./bootstrap/setup-oidc-role.sh
+```
+
+Then add the role ARN the script prints as a repo secret `AWS_ROLE_ARN`:
+
+```bash
+gh secret set AWS_ROLE_ARN --body "arn:aws:iam::<ACCOUNT_ID>:role/easy-drop-in-deploy"
+```
+
+After that, `.github/workflows/deploy-backend.yml` builds and deploys with SAM on every push to `main` touching `backend/`, and can also be run on demand from the Actions tab.
+
+To deploy manually instead:
+
 ```bash
 cd backend
 sam build && sam deploy --guided

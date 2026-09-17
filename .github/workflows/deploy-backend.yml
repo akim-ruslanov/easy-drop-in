@@ -1,0 +1,33 @@
+name: Deploy backend to AWS
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**', '.github/workflows/deploy-backend.yml']
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-west-2
+      STACK_NAME: easy-drop-in-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/setup-sam@v2
+        with: { use-installer: true }
+      - run: sam build
+        working-directory: backend
+      - run: >
+          sam deploy --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          --resolve-s3 --capabilities CAPABILITY_IAM
+          --no-confirm-changeset --no-fail-on-empty-changeset
+        working-directory: backend
