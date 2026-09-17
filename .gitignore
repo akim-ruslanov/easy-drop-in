@@ -5,3 +5,4 @@ dist/
 .env
 .aws-sam/
 .cache/
+backend/samconfig.toml

@@ -66,3 +66,9 @@ Add the API Gateway base URL as a repo secret `VITE_API_URL` (e.g. `https://abc1
 - Centre coordinates are hardcoded in `backend/centres.mjs` (geocoded once); "near me" uses browser geolocation or a typed location (geocoded via the backend's `/geocode` endpoint, backed by OpenStreetMap Nominatim). Geolocation requires a secure context (localhost or HTTPS).
 - Open spots come from the per-activity detail endpoint. Rather than fetching all ~700 upfront, the frontend asks `GET /spots?items=<id>~<date>,…` only for the events on screen; the backend caches each result for 5 minutes and fetches up to 16 at a time.
 - The merged feed is cached in S3 (single object, `FEED_TTL_MS`, default 30 min) so a Lambda cold start reuses it instead of refetching every calendar. Locally it falls back to `backend/.cache/feed.json`. With one tiny object and at most one GET per cold start and one PUT per rebuild, usage stays inside the AWS free tier: S3 (5 GB, 20,000 GET, 2,000 PUT/month for 12 months) and Lambda (1M requests, 400,000 GB-s/month). Raise `FEED_TTL_MS` if PUTs ever approach the limit.
+
+## TODO
+- [ ] add a job for backend deployment
+- [ ] ensure the roles/permissions are limited on aws
+- [ ] add an option to add to calendar when registration opens later
+- [ ] make the add to calendar open new tab in google calendar (download as a side option)
