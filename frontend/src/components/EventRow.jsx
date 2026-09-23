@@ -3,7 +3,7 @@ import { parseTime, formatTime, formatDateTime } from '../lib/dates';
 import { addEventToCalendar, addRegistrationReminder } from '../lib/calendar';
 import SpotsBadge from './SpotsBadge';
 
-export default function EventRow({ event, calendarMode = 'google' }) {
+export default function EventRow({ event, calendarMode = 'google', isWatched = false, onToggleWatch }) {
   const [open, setOpen] = useState(false);
   const start = parseTime(event.start);
   const end = parseTime(event.end);
@@ -73,12 +73,22 @@ export default function EventRow({ event, calendarMode = 'google' }) {
           </a>
         )}
         {registrationPending && (
-          <button
-            onClick={() => addRegistrationReminder(event, opens, calendarMode)}
-            className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-600"
-          >
-            {calendarMode === 'google' ? 'Remind me' : 'Remind me (.ics)'}
-          </button>
+          <>
+            <button
+              onClick={() => onToggleWatch && onToggleWatch(event)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium text-white ${
+                isWatched ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-gray-800 hover:bg-gray-900'
+              }`}
+            >
+              {isWatched ? 'Notifying ✓' : 'Notify me'}
+            </button>
+            <button
+              onClick={() => addRegistrationReminder(event, opens, calendarMode)}
+              className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-600"
+            >
+              {calendarMode === 'google' ? 'Remind me' : 'Remind me (.ics)'}
+            </button>
+          </>
         )}
         <button
           onClick={() => addEventToCalendar(event, calendarMode)}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchData, fetchSpots, geocode } from './api';
+import { fetchData, fetchSpots, geocode, listWatches, subscribeWatch, cancelWatch } from './api';
 import EventRow from './components/EventRow';
 import CalendarGrid from './components/CalendarGrid';
 import EventModal from './components/EventModal';
@@ -28,7 +28,37 @@ export default function App() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [spots, setSpots] = useState({});
   const [calendarMode, setCalendarMode] = useState('google');
+  const [watches, setWatches] = useState({});
   const spotsInFlight = useRef(new Set());
+
+  useEffect(() => {
+    listWatches()
+      .then((d) => {
+        const map = {};
+        for (const w of d.watches || []) if (!w.notified) map[w.activityId] = w.watchId;
+        setWatches(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function toggleWatch(event) {
+    const existing = watches[event.id];
+    if (existing) {
+      setWatches((prev) => {
+        const next = { ...prev };
+        delete next[event.id];
+        return next;
+      });
+      cancelWatch(existing).catch(() => {});
+      return;
+    }
+    try {
+      const d = await subscribeWatch(event);
+      setWatches((prev) => ({ ...prev, [event.id]: d.watchId }));
+    } catch {
+      /* e.g. registration already open; leave the button unchanged */
+    }
+  }
 
   useEffect(() => {
     fetchData()
@@ -374,7 +404,13 @@ export default function App() {
                 </h2>
                 <div className="space-y-2">
                   {dayEvents.map((e) => (
-                    <EventRow key={`${e.id}-${e.start}`} event={e} calendarMode={calendarMode} />
+                    <EventRow
+                      key={`${e.id}-${e.start}`}
+                      event={e}
+                      calendarMode={calendarMode}
+                      isWatched={Boolean(watches[e.id])}
+                      onToggleWatch={toggleWatch}
+                    />
                   ))}
                 </div>
               </section>
@@ -395,6 +431,8 @@ export default function App() {
       <EventModal
         event={selectedEvent}
         calendarMode={calendarMode}
+        isWatched={selectedEvent ? Boolean(watches[selectedEvent.id]) : false}
+        onToggleWatch={toggleWatch}
         onClose={() => setSelectedEvent(null)}
       />
     </div>

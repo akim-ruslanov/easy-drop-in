@@ -1,18 +1,35 @@
 import { createServer } from 'node:http';
 import { getEvents, getCentres, getSpots, parseSpotItems } from './anc.mjs';
 import { geocode } from './geocode.mjs';
+import { createWatch, listWatches, deleteWatch, runWatch } from './watch.mjs';
 
 const PORT = process.env.PORT || 8787;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
 };
 
 function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json', ...CORS });
   res.end(JSON.stringify(body));
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(raw || '{}'));
+      } catch {
+        resolve({});
+      }
+    });
+  });
 }
 
 const server = createServer(async (req, res) => {
@@ -53,6 +70,48 @@ const server = createServer(async (req, res) => {
     } catch (e) {
       console.error(e);
       send(res, 502, { error: 'Geocoding unavailable' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname.endsWith('/watch')) {
+    try {
+      send(res, 201, await createWatch(await readBody(req)));
+    } catch (e) {
+      console.error(e);
+      send(res, 400, { error: e.message || 'Could not create watch' });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname.endsWith('/watch')) {
+    try {
+      send(res, 200, { watches: await listWatches() });
+    } catch (e) {
+      console.error(e);
+      send(res, 502, { error: 'Could not list watches' });
+    }
+    return;
+  }
+
+  // Dev-only: fire a watch immediately (no Scheduler locally).
+  if (req.method === 'POST' && url.pathname.endsWith('/watch/run')) {
+    try {
+      send(res, 200, await runWatch(await readBody(req)));
+    } catch (e) {
+      console.error(e);
+      send(res, 502, { error: e.message || 'Watch run failed' });
+    }
+    return;
+  }
+
+  if (req.method === 'DELETE' && /\/watch\/[^/]+$/.test(url.pathname)) {
+    try {
+      const watchId = decodeURIComponent(url.pathname.split('/').pop());
+      send(res, 200, await deleteWatch(watchId));
+    } catch (e) {
+      console.error(e);
+      send(res, 502, { error: 'Could not delete watch' });
     }
     return;
   }

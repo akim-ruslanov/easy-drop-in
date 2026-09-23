@@ -16,6 +16,8 @@ set -euo pipefail
 ROLE_NAME="${ROLE_NAME:-easy-drop-in-deploy}"
 REPO="${REPO:-akim-ruslanov/easy-drop-in}"
 BRANCH="${BRANCH:-main}"
+OWNER="${REPO%%/*}"
+REPO_NAME="${REPO##*/}"
 OIDC_HOST="token.actions.githubusercontent.com"
 MANAGED_POLICIES=(
   AWSCloudFormationFullAccess
@@ -36,6 +38,8 @@ trap 'rm -rf "$tmpdir"' EXIT
 render() {
   sed -e "s|__ACCOUNT_ID__|${ACCOUNT_ID}|g" \
       -e "s|__REPO__|${REPO}|g" \
+      -e "s|__OWNER__|${OWNER}|g" \
+      -e "s|__REPO_NAME__|${REPO_NAME}|g" \
       -e "s|__BRANCH__|${BRANCH}|g" \
       "$1" > "$tmpdir/$(basename "$1")"
 }

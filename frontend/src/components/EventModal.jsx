@@ -3,7 +3,13 @@ import { parseTime, formatTime, formatDayHeader, formatDateTime } from '../lib/d
 import { addEventToCalendar, addRegistrationReminder } from '../lib/calendar';
 import SpotsBadge from './SpotsBadge';
 
-export default function EventModal({ event, calendarMode = 'google', onClose }) {
+export default function EventModal({
+  event,
+  calendarMode = 'google',
+  isWatched = false,
+  onToggleWatch,
+  onClose,
+}) {
   useEffect(() => {
     if (!event) return;
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -81,6 +87,16 @@ export default function EventModal({ event, calendarMode = 'google', onClose }) 
             >
               Sign up
             </a>
+          )}
+          {registrationPending && (
+            <button
+              onClick={() => onToggleWatch && onToggleWatch(event)}
+              className={`rounded-md px-4 py-2 text-sm font-medium text-white ${
+                isWatched ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-gray-800 hover:bg-gray-900'
+              }`}
+            >
+              {isWatched ? 'Notifying ✓' : 'Notify me when registration opens'}
+            </button>
           )}
           {registrationPending && (
             <button

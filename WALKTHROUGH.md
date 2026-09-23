@@ -63,6 +63,8 @@ easy-drop-in/
 │   ├── server.mjs            # local-only HTTP server (dev entry point)
 │   ├── anc.mjs               # core ANC proxy logic + caching
 │   ├── cache.mjs             # persistent feed cache (S3 or local file)
+│   ├── watch.mjs             # registration "notify me" watches (DynamoDB + Scheduler)
+│   ├── notify.mjs            # webhook notifier (ntfy/discord/telegram/generic)
 │   ├── centres.mjs           # static list of 24 community centres + coords
 │   ├── geocode.mjs           # Nominatim address -> lat/lng proxy
 │   ├── template.yaml         # AWS SAM/CloudFormation deployment template
@@ -116,6 +118,9 @@ Route table (both entry points behave identically):
 | GET    | `/events`  | full merged feed (centres + events), no open-spot counts |
 | GET    | `/spots`   | open-spot counts for requested `items` |
 | GET    | `/geocode` | address string -> `{ lat, lng, name }` via Nominatim |
+| POST   | `/watch`   | subscribe to a registration-open alert for an activity |
+| GET    | `/watch`   | list active watches |
+| DELETE | `/watch/{id}` | cancel a watch (removes record + schedule) |
 | OPTIONS| any        | CORS preflight |
 
 `path.endsWith(...)` is used rather than exact equality because API Gateway adds
@@ -246,7 +251,32 @@ Storing one object is intentional: one GET per cold start and one PUT per
 rebuild keeps S3 usage inside the free tier. Both read and write swallow errors,
 so a cache outage degrades to a rebuild rather than a failure.
 
-### 3.4 `centres.mjs` and `geocode.mjs`
+### 3.4 `watch.mjs` and `notify.mjs` — registration alerts
+
+`watch.mjs` implements "notify me when registration opens". Each watch is a
+DynamoDB item (keyed `watchId = "<activityId>-<dueEpochMs>"`, with a TTL) plus an
+**EventBridge Scheduler** one-time schedule created at `registrationOpens`. When
+it fires, Scheduler invokes the same Lambda with `{ job: "watch", watchId }`; the
+handler calls `runWatch`, which loads the record, posts a webhook, and marks it
+notified.
+
+- `zonedTimeToUtc(local, "America/Vancouver")` converts ANC's naive local
+  datetimes to the correct absolute instant (DST-aware, two-pass `Intl`). This is
+  essential: the schedule must fire at the right real-world second.
+- Storage uses `@aws-sdk/lib-dynamodb` (runtime-provided) when `WATCHES_TABLE`
+  is set, else `backend/.cache/watches.json` locally (same pattern as
+  `cache.mjs`).
+- Scheduling is skipped when `SCHEDULER_ROLE_ARN` is unset or no `targetArn` is
+  passed (local dev). The target ARN comes from
+  `context.invokedFunctionArn`, which avoids a CloudFormation self-reference.
+- `runWatch` optionally enriches the message with the current open-spot count via
+  `getSpots` (best-effort; failures never block the alert).
+
+`notify.mjs` is a thin webhook adapter selected by `NOTIFY_KIND`
+(`ntfy` | `discord` | `telegram` | `generic`) with the URL/credentials in
+environment variables so the destination never reaches the browser.
+
+### 3.5 `centres.mjs` and `geocode.mjs`
 
 - `centres.mjs` is a static array of the 24 centres with id, name, address and
   pre-geocoded coordinates. `/events` returns it verbatim so the frontend can
@@ -314,6 +344,40 @@ or `null` when registration is already open or unavailable.
 
 Returns `404 { "error": "Location not found" }` when Nominatim has no match.
 
+### `POST /watch`
+
+Request body is the fields the frontend already has for the event:
+
+```json
+{
+  "id": 621099,
+  "date": "2026-09-21 19:45:00",
+  "title": "MP Sports - Volleyball",
+  "center": "Mount Pleasant Community Centre",
+  "facility": "Gymnasium",
+  "sport": "Sports: Volleyball",
+  "url": "https://anc.ca.apm.activecommunities.com/vancouver/activity/search/detail/621099",
+  "registrationOpens": "2026-09-18 12:00:00"
+}
+```
+
+Response: `201 { "watchId": "621099-…", "dueAtUtc": "…Z", "scheduled": true }`.
+Returns `400` if `registrationOpens` is missing or already in the past.
+
+### `GET /watch`
+
+```json
+{ "watches": [{ "watchId": "621099-…", "activityId": 621099, "registrationOpens": "…", "notified": false, "title": "MP Sports - Volleyball" }] }
+```
+
+### `DELETE /watch/{watchId}`
+
+Deletes the DynamoDB item and its Scheduler schedule. Returns `{ "watchId": "…", "deleted": true }`.
+
+### Scheduled invocation (not HTTP)
+
+The same function is invoked by EventBridge Scheduler with `{ "job": "watch", "watchId": "…" }`; it sends the webhook and returns `200`.
+
 ---
 
 ## 5. Frontend
@@ -339,9 +403,10 @@ effects — the spot-fetching effect is written to tolerate that.
 
 ### 5.3 `api.js`
 
-Three thin wrappers, all using the global `fetch`:
-`fetchData()` (`/events`), `fetchSpots(items)` (`/spots`, chunk-friendly), and
-`geocode(query)` (`/geocode`). The base URL is
+Thin wrappers over the global `fetch`: `fetchData()` (`/events`),
+`fetchSpots(items)` (`/spots`, chunk-friendly), `geocode(query)` (`/geocode`),
+and the watch trio `subscribeWatch(event)` (`POST /watch`), `listWatches()`
+(`GET /watch`), `cancelWatch(watchId)` (`DELETE /watch/{id}`). The base URL is
 `import.meta.env.VITE_API_URL || 'http://localhost:8787'`.
 
 ### 5.4 `App.jsx` — data flow (the important part)
@@ -351,9 +416,11 @@ All application state is in this one component. Key pieces:
 **State.** Filter inputs (`query`, `sport`, `ageGroup`, `openSpotsOnly`,
 `range`), view/navigation (`view`, `weekStart`), centre/location selection,
 `selectedEvent` for the modal, `calendarMode` (`'google'` default, or `'ics'`),
-and `spots` — a map of activity id -> spot info loaded lazily. `spotsInFlight`
-is a `useRef(Set)` used to dedupe concurrent requests without triggering
-re-renders.
+`spots` — a map of activity id -> spot info loaded lazily, and `watches` — a map
+of activity id -> watchId for active registration alerts. `spotsInFlight` is a
+`useRef(Set)` used to dedupe concurrent requests without triggering re-renders.
+On mount, `listWatches()` seeds `watches`; `toggleWatch(event)` subscribes or
+cancels and updates the map optimistically.
 
 **Derived data (a pipeline of `useMemo`s).** Read it top to bottom:
 
@@ -396,10 +463,11 @@ API; `setLocationByText` calls the backend `/geocode`.
   from `COLOURS` keyed by `event.sport` (falling back to `calendarName`).
 - **`EventRow`** — list row: time, title, spot badge, price, location line, an
   amber "registration opens …" note when applicable, expandable description,
-  sign-up link, a "Remind me" button, and an "add to calendar" button. Button
-  behaviour follows the global `calendarMode`.
+  sign-up link, and (when registration is pending) "Notify me" + "Remind me"
+  buttons plus an "add to calendar" button. Button behaviour follows the global
+  `calendarMode`; "Notify me" calls `onToggleWatch` and shows "Notifying ✓" when active.
 - **`EventModal`** — details for a clicked calendar event, including the
-  registration-open note and reminder button.
+  registration-open note, "Notify me", and reminder buttons.
 - **`SpotsBadge`** — renders "N spots" / "Full", or nothing when data is absent.
 - **`CentreFilter`** — the dropdown: centre search, "use my location", a typed
   location, radius selector, distance-sorted list, All/None.
@@ -467,18 +535,24 @@ What the template creates:
 | Resource            | Type                        | Role |
 |---------------------|-----------------------------|------|
 | `FeedCacheBucket`   | `AWS::S3::Bucket`           | holds the single cached feed object; a lifecycle rule expires objects after 7 days as a safety net |
+| `WatchesTable`      | `AWS::DynamoDB::Table`      | registration watches, on-demand billing, TTL on `expiresAt` |
+| `WatchSchedulerRole`| `AWS::IAM::Role`            | assumed by EventBridge Scheduler to invoke the function at the open time |
 | `EventsFunction`    | `AWS::Serverless::Function` | the Lambda running `index.handler` |
 | `Api`               | `AWS::Serverless::HttpApi`  | API Gateway HTTP API with open CORS |
-| `GetEvents`/`GetSpots` events | `HttpApi` events   | route `GET /events` and `GET /spots` to the function |
+| `GetEvents`/`GetSpots`/`PostWatch`/`ListWatches`/`DeleteWatch` | `HttpApi` events | map the routes to the function |
 | `ApiUrl`            | Output                      | prints the base URL |
 
 Function configuration:
 
 - Runtime `nodejs20.x`, 60 s timeout, 512 MB.
 - Environment: `SPORTS_CALENDARS`, `CACHE_BUCKET` (= the bucket's generated
-  name), `CACHE_KEY=feed.json`, `FEED_TTL_MS=1800000` (30 min).
-- IAM: an inline policy granting only `s3:GetObject` and `s3:PutObject` on the
-  bucket (`${FeedCacheBucket.Arn}/*`) — least privilege. No other AWS access.
+  name), `CACHE_KEY=feed.json`, `FEED_TTL_MS=1800000` (30 min), `WATCHES_TABLE`,
+  `SCHEDULER_ROLE_ARN`, and the notification settings (`NOTIFY_KIND`,
+  `NOTIFY_WEBHOOK_URL`, `NOTIFY_TELEGRAM_CHAT_ID`).
+- IAM: inline policies granting S3 read/write on the cache bucket, DynamoDB CRUD
+  on `WatchesTable`, `scheduler:CreateSchedule`/`GetSchedule`/`DeleteSchedule`
+  on the default schedule group, and `iam:PassRole` for `WatchSchedulerRole`
+  only. Least privilege.
 
 Deployment locations: Lambda + API Gateway + S3 in the chosen AWS region; the
 `ApiUrl` output (e.g. `https://abc123.execute-api.us-west-2.amazonaws.com/events`)
@@ -535,6 +609,14 @@ Browser then calls /spots for the visible events
    │
    ▼
 Lambda ── per-id in-memory spot cache ── ANC activity-details
+
+Registration alert
+   │
+Browser ── POST /watch ──► Lambda ── DynamoDB item ── EventBridge Scheduler
+                                                       (one-time, at open time)
+                                                              │
+                                                              ▼
+                                        Lambda { job: "watch" } ── webhook
 ```
 
 ### Cold vs warm, and the three cache layers

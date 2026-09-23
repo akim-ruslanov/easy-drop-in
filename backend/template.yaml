@@ -21,6 +21,43 @@ Resources:
             Status: Enabled
             ExpirationInDays: 7
 
+  # One item per "notify me when registration opens" subscription. On-demand
+  # billing and TTL cleanup keep it inside the DynamoDB free tier.
+  WatchesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: watchId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: watchId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  # Assumed by EventBridge Scheduler to invoke this same Lambda at the
+  # registration-open time. Scoped to this stack's function.
+  WatchSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeEventsFunction
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-EventsFunction-*'
+
   EventsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -33,6 +70,12 @@ Resources:
           CACHE_KEY: feed.json
           # 30 min: caps S3 writes at ~1,440/month (free tier: 2,000 PUT).
           FEED_TTL_MS: '1800000'
+          WATCHES_TABLE: !Ref WatchesTable
+          SCHEDULER_ROLE_ARN: !GetAtt WatchSchedulerRole.Arn
+          # Notification destination, set after deploy (see README/AWS_SETUP).
+          NOTIFY_KIND: ntfy
+          NOTIFY_WEBHOOK_URL: ''
+          NOTIFY_TELEGRAM_CHAT_ID: ''
       Policies:
         - Statement:
             - Effect: Allow
@@ -40,6 +83,29 @@ Resources:
                 - s3:GetObject
                 - s3:PutObject
               Resource: !Sub '${FeedCacheBucket.Arn}/*'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:DeleteItem
+                - dynamodb:UpdateItem
+                - dynamodb:Scan
+              Resource: !GetAtt WatchesTable.Arn
+        - Statement:
+            - Effect: Allow
+              Action:
+                - scheduler:CreateSchedule
+                - scheduler:GetSchedule
+                - scheduler:DeleteSchedule
+              Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/*'
+        - Statement:
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt WatchSchedulerRole.Arn
+              Condition:
+                StringEquals:
+                  iam:PassedToService: scheduler.amazonaws.com
       Events:
         GetEvents:
           Type: HttpApi
@@ -53,6 +119,24 @@ Resources:
             ApiId: !Ref Api
             Path: /spots
             Method: get
+        PostWatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /watch
+            Method: post
+        ListWatches:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /watch
+            Method: get
+        DeleteWatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /watch/{id}
+            Method: delete
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -62,6 +146,8 @@ Resources:
           - '*'
         AllowMethods:
           - GET
+          - POST
+          - DELETE
           - OPTIONS
         AllowHeaders:
           - Content-Type

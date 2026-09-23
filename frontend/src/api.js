@@ -22,3 +22,38 @@ export async function fetchSpots(items) {
   if (!res.ok) throw new Error(`Failed to fetch spots (${res.status})`);
   return res.json();
 }
+
+// Server-side "notify me when registration opens" subscriptions.
+export async function subscribeWatch(event) {
+  const res = await fetch(`${API_URL}/watch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: event.id,
+      date: event.start,
+      title: event.title,
+      center: event.centerName,
+      facility: event.facility,
+      sport: event.sport || event.calendarName,
+      url: event.url,
+      registrationOpens: event.registrationOpens,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to subscribe (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function listWatches() {
+  const res = await fetch(`${API_URL}/watch`);
+  if (!res.ok) throw new Error(`Failed to list watches (${res.status})`);
+  return res.json();
+}
+
+export async function cancelWatch(watchId) {
+  const res = await fetch(`${API_URL}/watch/${encodeURIComponent(watchId)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Failed to cancel watch (${res.status})`);
+  return res.json();
+}
