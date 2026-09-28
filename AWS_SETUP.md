@@ -152,9 +152,10 @@ Deploying the stack `easy-drop-in-backend` created:
 |----------|------------------------------|-------|
 | CloudFormation stack | `easy-drop-in-backend` | Groups everything below |
 | Lambda function | `easy-drop-in-backend-EventsFunction-z1Dwf6fQhcVL` | `nodejs20.x`, 512 MB, 60 s timeout |
-| API Gateway HTTP API | `easy-drop-in-backend` (`zxwih3in2j`) | Routes `GET /events`, `GET /spots`, `POST|GET /watch`, `DELETE /watch/{id}` |
+| API Gateway HTTP API | `easy-drop-in-backend` (`zxwih3in2j`) | Routes `GET /events`, `GET /spots`, `POST\|GET /watch`, `DELETE /watch/{id}`, `POST /auth/signup\|login`, `GET /auth/me`, `PUT /profile` |
 | Feed cache bucket | `easy-drop-in-backend-feedcachebucket-nsrwwu14g4y2` | Holds `feed.json` (30-min cache) |
 | Registration watches table | `easy-drop-in-backend-WatchesTable-…` | DynamoDB, on-demand, TTL on `expiresAt` |
+| Users table | `easy-drop-in-backend-UsersTable-…` | DynamoDB, on-demand; accounts + favourites + webhooks |
 | Scheduler role | `easy-drop-in-backend-WatchSchedulerRole-…` | Assumed by EventBridge Scheduler to invoke the Lambda |
 | SAM artifacts bucket | `aws-sam-cli-managed-default-samclisourcebucket-xkyjwehlf7kk` | Where `sam deploy` uploads code zips |
 | Lambda execution role | `easy-drop-in-backend-EventsFunctionRole-oRN082ecyCbJ` | Lambda's own permissions (S3, DynamoDB, Scheduler, PassRole, logs) |
@@ -164,8 +165,9 @@ Deploying the stack `easy-drop-in-backend` created:
 - **Frontend secret:** `VITE_API_URL` should be the **base** URL above (no
   `/events`), because `frontend/src/api.js` appends the path.
 - **Environment variables on the Lambda:** `SPORTS_CALENDARS`, `CACHE_BUCKET`,
-  `CACHE_KEY`, `FEED_TTL_MS`, `WATCHES_TABLE`, `SCHEDULER_ROLE_ARN`,
-  `NOTIFY_KIND`, `NOTIFY_WEBHOOK_URL`, `NOTIFY_TELEGRAM_CHAT_ID`.
+  `CACHE_KEY`, `FEED_TTL_MS`, `WATCHES_TABLE`, `USERS_TABLE`, `AUTH_SECRET`,
+  `SCHEDULER_ROLE_ARN`, `NOTIFY_KIND`, `NOTIFY_WEBHOOK_URL`,
+  `NOTIFY_TELEGRAM_CHAT_ID`.
 - Bucket names are auto-generated and include a random suffix; don't hardcode
   them outside the stack. The Lambda gets the cache bucket name injected via
   `!Ref FeedCacheBucket`.
@@ -191,6 +193,20 @@ aws lambda update-function-configuration --function-name <function-name> \
 - `discord` — the channel webhook URL
 - `telegram` — `https://api.telegram.org/bot<token>/sendMessage` plus `NOTIFY_TELEGRAM_CHAT_ID`
 - `generic` — any URL accepting `{ title, text }`
+
+### Accounts, favourites and per-user webhooks
+
+`POST /auth/signup` / `POST /auth/login` create a session token (scrypt-hashed
+passwords, HMAC-signed JWT). `GET /auth/me` and `PUT /profile` are authenticated;
+`/profile` stores favourite sports/centres and the notification webhook that
+`/watch` alerts use. The token-signing key comes from the `AuthSecret`
+CloudFormation parameter (wired to the `AUTH_SECRET` GitHub secret in the deploy
+workflow). Generate one with `openssl rand -hex 32`. Auth endpoints return an
+error until it is set.
+
+**This does not enable automated ANC sign-up.** App accounts are unrelated to the
+ActiveNet login, whose sign-in is protected by reCAPTCHA v3 and whose checkout
+uses OTP and payment. Alerts deep-link the user to finish those steps.
 
 ---
 

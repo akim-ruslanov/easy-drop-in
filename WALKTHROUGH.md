@@ -65,6 +65,7 @@ easy-drop-in/
 │   ├── cache.mjs             # persistent feed cache (S3 or local file)
 │   ├── watch.mjs             # registration "notify me" watches (DynamoDB + Scheduler)
 │   ├── notify.mjs            # webhook notifier (ntfy/discord/telegram/generic)
+│   ├── auth.mjs              # accounts: scrypt passwords, HMAC tokens, users/profile
 │   ├── centres.mjs           # static list of 24 community centres + coords
 │   ├── geocode.mjs           # Nominatim address -> lat/lng proxy
 │   ├── template.yaml         # AWS SAM/CloudFormation deployment template
@@ -118,9 +119,13 @@ Route table (both entry points behave identically):
 | GET    | `/events`  | full merged feed (centres + events), no open-spot counts |
 | GET    | `/spots`   | open-spot counts for requested `items` |
 | GET    | `/geocode` | address string -> `{ lat, lng, name }` via Nominatim |
-| POST   | `/watch`   | subscribe to a registration-open alert for an activity |
-| GET    | `/watch`   | list active watches |
-| DELETE | `/watch/{id}` | cancel a watch (removes record + schedule) |
+| POST   | `/watch`   | subscribe to a registration-open alert for an activity (signed in) |
+| GET    | `/watch`   | list active watches (signed in) |
+| DELETE | `/watch/{id}` | cancel a watch (signed in; removes record + schedule) |
+| POST   | `/auth/signup` | create an account |
+| POST   | `/auth/login`  | sign in |
+| GET    | `/auth/me`     | current account (signed in) |
+| PUT    | `/profile`     | update favourites + webhook (signed in) |
 | OPTIONS| any        | CORS preflight |
 
 `path.endsWith(...)` is used rather than exact equality because API Gateway adds
@@ -276,7 +281,42 @@ notified.
 (`ntfy` | `discord` | `telegram` | `generic`) with the URL/credentials in
 environment variables so the destination never reaches the browser.
 
-### 3.5 `centres.mjs` and `geocode.mjs`
+### 3.5 `auth.mjs` — accounts
+
+A deliberately small, dependency-free auth module:
+
+- **Passwords** are hashed with Node's `crypto.scrypt` (N=16384, r=8, p=1) using
+  a random per-user salt, stored as `scrypt$N$r$p$salt$hash`, and compared with
+  `timingSafeEqual`.
+- **Sessions** are stateless JWTs signed HS256 with `AUTH_SECRET`. `signToken` /
+  `verifyToken` are hand-rolled over `crypto.createHmac` (no dependency);
+  `sessionFrom(event)` reads the `Authorization: Bearer …` header. Auth is
+  disabled (throws) while `AUTH_SECRET` is empty.
+- **Users** live in DynamoDB (`UsersTable`, keyed by lowercased email) or
+  `backend/.cache/users.json` locally. `signUp` / `logIn` / `currentUser` /
+  `updateProfile` are the public API; `publicUser` strips `passwordHash`.
+- **Preferences** are `favouriteCentres` (ids), `favouriteSports` (labels) and a
+  `webhook` object, validated/normalised on write.
+
+`watch.mjs` reads the owner's `webhook` at fire time, so changing it in
+preferences affects existing alerts. `POST/GET/DELETE /watch` require a session;
+`/events`, `/spots`, `/geocode` stay public.
+
+#### Can these accounts automate ANC sign-up?
+
+No. App accounts (email/password, our JWT) authenticate a user **to this site**;
+they have no relationship to the City of Vancouver/ActiveNet account. Automating
+an actual ANC enrollment would require, separately: an ANC login (blocked by
+Google reCAPTCHA v3 — see the bundle's `signInRecaptcha`/`RECAPTCHA_ACTIONS.LOGIN`),
+the add-to-cart customer verification/OTP flow
+(`/activity/enrollment/addtocart/{identifycustomer,verifyotp}`,
+`/user/account/sendotp`), and checkout/payment (`/checkout`,
+`/payment/widgettoken/0`). Those are deliberate anti-automation controls, and
+storing/replaying ANC credentials would be a security and terms-of-service
+problem. The accounts here exist only to hold favourites and a per-user webhook,
+and the alert deep-links the user to complete the protected steps themselves.
+
+### 3.6 `centres.mjs` and `geocode.mjs`
 
 - `centres.mjs` is a static array of the 24 centres with id, name, address and
   pre-geocoded coordinates. `/events` returns it verbatim so the frontend can
@@ -378,6 +418,17 @@ Deletes the DynamoDB item and its Scheduler schedule. Returns `{ "watchId": "…
 
 The same function is invoked by EventBridge Scheduler with `{ "job": "watch", "watchId": "…" }`; it sends the webhook and returns `200`.
 
+### `POST /auth/signup` and `POST /auth/login`
+
+Body `{ "email", "password" }`; response `{ token, user }` where `user` is
+`{ email, userId, favouriteCentres, favouriteSports, webhook }`. `signup` returns
+`201` (or `400` for invalid/duplicate email), `login` returns `401` on failure.
+
+### `GET /auth/me` and `PUT /profile`
+
+Both require `Authorization: Bearer <token>`. `PUT /profile` accepts
+`{ favouriteCentres, favouriteSports, webhook }` and returns the updated `user`.
+
 ---
 
 ## 5. Frontend
@@ -405,8 +456,10 @@ effects — the spot-fetching effect is written to tolerate that.
 
 Thin wrappers over the global `fetch`: `fetchData()` (`/events`),
 `fetchSpots(items)` (`/spots`, chunk-friendly), `geocode(query)` (`/geocode`),
-and the watch trio `subscribeWatch(event)` (`POST /watch`), `listWatches()`
-(`GET /watch`), `cancelWatch(watchId)` (`DELETE /watch/{id}`). The base URL is
+the watch trio `subscribeWatch(event)` / `listWatches()` / `cancelWatch(watchId)`,
+and accounts `signup` / `login` / `fetchMe` / `saveProfile`. The session token is
+kept in `localStorage` (`edi_token`) and attached as `Authorization: Bearer …`
+by the `headers({ auth: true })` helper. The base URL is
 `import.meta.env.VITE_API_URL || 'http://localhost:8787'`.
 
 ### 5.4 `App.jsx` — data flow (the important part)
@@ -416,11 +469,15 @@ All application state is in this one component. Key pieces:
 **State.** Filter inputs (`query`, `sport`, `ageGroup`, `openSpotsOnly`,
 `range`), view/navigation (`view`, `weekStart`), centre/location selection,
 `selectedEvent` for the modal, `calendarMode` (`'google'` default, or `'ics'`),
-`spots` — a map of activity id -> spot info loaded lazily, and `watches` — a map
-of activity id -> watchId for active registration alerts. `spotsInFlight` is a
-`useRef(Set)` used to dedupe concurrent requests without triggering re-renders.
-On mount, `listWatches()` seeds `watches`; `toggleWatch(event)` subscribes or
-cancels and updates the map optimistically.
+`spots` — a map of activity id -> spot info loaded lazily, `watches` — a map of
+activity id -> watchId for active registration alerts, and `user` — the signed-in
+account (plus `authOpen` / `settingsOpen` / `favouritesOnly` UI state).
+`spotsInFlight` is a `useRef(Set)` used to dedupe concurrent requests without
+triggering re-renders. On mount, `fetchMe()` restores the session (clearing the
+token on 401) and, once signed in, `listWatches()` seeds `watches`.
+`toggleWatch(event)` opens the auth modal when signed out, otherwise subscribes
+or cancels. Favourites (`user.favouriteCentres` / `favouriteSports`) drive an
+optional "Favourites only" filter in `visibleEvents`.
 
 **Derived data (a pipeline of `useMemo`s).** Read it top to bottom:
 
@@ -471,6 +528,10 @@ API; `setLocationByText` calls the backend `/geocode`.
 - **`SpotsBadge`** — renders "N spots" / "Full", or nothing when data is absent.
 - **`CentreFilter`** — the dropdown: centre search, "use my location", a typed
   location, radius selector, distance-sorted list, All/None.
+- **`AuthModal`** — sign in / sign up (email + password); calls `login`/`signup`
+  and returns the user to `App`.
+- **`SettingsModal`** — manages `favouriteSports`, `favouriteCentres` and the
+  notification `webhook` (kind + URL + Telegram chat id); saves via `PUT /profile`.
 
 ### 5.6 `lib/`
 

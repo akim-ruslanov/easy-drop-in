@@ -1,9 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchData, fetchSpots, geocode, listWatches, subscribeWatch, cancelWatch } from './api';
+import {
+  fetchData,
+  fetchSpots,
+  geocode,
+  listWatches,
+  subscribeWatch,
+  cancelWatch,
+  fetchMe,
+  saveProfile,
+  setToken,
+} from './api';
 import EventRow from './components/EventRow';
 import CalendarGrid from './components/CalendarGrid';
 import EventModal from './components/EventModal';
 import CentreFilter from './components/CentreFilter';
+import AuthModal from './components/AuthModal';
+import SettingsModal from './components/SettingsModal';
 import { parseTime, dateKey, formatDayHeader, startOfWeek, addDays } from './lib/dates';
 import { haversineKm } from './lib/geo';
 
@@ -29,9 +41,23 @@ export default function App() {
   const [spots, setSpots] = useState({});
   const [calendarMode, setCalendarMode] = useState('google');
   const [watches, setWatches] = useState({});
+  const [user, setUser] = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [favouritesOnly, setFavouritesOnly] = useState(false);
   const spotsInFlight = useRef(new Set());
 
   useEffect(() => {
+    fetchMe()
+      .then(setUser)
+      .catch(() => setToken(''));
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setWatches({});
+      return;
+    }
     listWatches()
       .then((d) => {
         const map = {};
@@ -39,9 +65,25 @@ export default function App() {
         setWatches(map);
       })
       .catch(() => {});
-  }, []);
+  }, [user]);
+
+  function logOut() {
+    setToken('');
+    setUser(null);
+    setFavouritesOnly(false);
+  }
+
+  async function updateProfile(profile) {
+    const updated = await saveProfile(profile);
+    setUser(updated);
+    return updated;
+  }
 
   async function toggleWatch(event) {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
     const existing = watches[event.id];
     if (existing) {
       setWatches((prev) => {
@@ -55,8 +97,8 @@ export default function App() {
     try {
       const d = await subscribeWatch(event);
       setWatches((prev) => ({ ...prev, [event.id]: d.watchId }));
-    } catch {
-      /* e.g. registration already open; leave the button unchanged */
+    } catch (e) {
+      if (e.status === 401) setAuthOpen(true);
     }
   }
 
@@ -82,6 +124,16 @@ export default function App() {
     [data],
   );
 
+  const favouriteCentres = useMemo(
+    () => new Set((user?.favouriteCentres || []).map(Number)),
+    [user],
+  );
+  const favouriteSports = useMemo(
+    () => new Set(user?.favouriteSports || []),
+    [user],
+  );
+  const hasFavourites = favouriteCentres.size > 0 || favouriteSports.size > 0;
+
   const eventsWithSpots = useMemo(() => {
     const events = data?.events || [];
     if (!Object.keys(spots).length) return events;
@@ -98,12 +150,17 @@ export default function App() {
     });
   }, [data, spots]);
 
+  function isFavourite(e) {
+    return favouriteCentres.has(e.centerId) || favouriteSports.has(e.sport || e.calendarName);
+  }
+
   const visibleEvents = useMemo(() => {
     const q = query.trim().toLowerCase();
     return eventsWithSpots.filter((e) => {
       if (sport !== 'All' && (e.sport || e.calendarName) !== sport) return false;
       if (ageGroup !== 'All' && e.ageGroup !== ageGroup) return false;
       if (selectedCentres && !selectedCentres.has(e.centerId)) return false;
+      if (favouritesOnly && !isFavourite(e)) return false;
       if (q) {
         const hay = [e.title, e.description, e.centerName, e.facility, e.sport, e.calendarName]
           .join(' ')
@@ -112,7 +169,7 @@ export default function App() {
       }
       return true;
     });
-  }, [eventsWithSpots, query, sport, ageGroup, selectedCentres]);
+  }, [eventsWithSpots, query, sport, ageGroup, selectedCentres, favouritesOnly, favouriteCentres, favouriteSports]);
 
   const weekEvents = useMemo(() => {
     const end = addDays(weekStart, 7);
@@ -242,6 +299,30 @@ export default function App() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {user ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setSettingsOpen(true)}
+                    title="Preferences"
+                    className="max-w-[10rem] truncate rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    {user.email}
+                  </button>
+                  <button
+                    onClick={logOut}
+                    className="rounded-lg px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-100"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAuthOpen(true)}
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Sign in
+                </button>
+              )}
               <CentreFilter
                 centres={centres}
                 selected={selectedCentres}
@@ -326,6 +407,18 @@ export default function App() {
               />
               Open spots only
             </label>
+
+            {user && hasFavourites && (
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={favouritesOnly}
+                  onChange={(e) => setFavouritesOnly(e.target.checked)}
+                  className="accent-blue-600"
+                />
+                Favourites only
+              </label>
+            )}
 
             <div className="ml-auto flex items-center gap-2">
               {view === 'list' && (
@@ -435,6 +528,26 @@ export default function App() {
         onToggleWatch={toggleWatch}
         onClose={() => setSelectedEvent(null)}
       />
+
+      {authOpen && (
+        <AuthModal
+          onAuthed={(u) => {
+            setUser(u);
+            setAuthOpen(false);
+          }}
+          onClose={() => setAuthOpen(false)}
+        />
+      )}
+
+      {settingsOpen && user && (
+        <SettingsModal
+          user={user}
+          centres={centres}
+          sports={sports}
+          onSave={updateProfile}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,26 +1,37 @@
-// Sends a registration-open alert to an external webhook. The destination is
-// configured entirely through Lambda environment variables so the URL is never
-// exposed to the browser. Supported kinds:
+// Sends a registration-open alert to an external webhook. A per-user config
+// (kind/url/chatId/token) can be passed in; otherwise the Lambda environment
+// defaults are used. The destination never reaches the browser.
 //   ntfy      POST https://ntfy.sh/<topic>            body = message
 //   discord   POST <webhook url>                      { content }
 //   telegram  POST https://api.telegram.org/bot<T>/sendMessage  { chat_id, text }
 //   generic   POST <url>                              { title, text }
-function config() {
+function envConfig() {
   return {
-    kind: (process.env.NOTIFY_KIND || 'ntfy').toLowerCase(),
+    kind: process.env.NOTIFY_KIND || 'ntfy',
     url: process.env.NOTIFY_WEBHOOK_URL || '',
     chatId: process.env.NOTIFY_TELEGRAM_CHAT_ID || '',
     token: process.env.NOTIFY_AUTH_TOKEN || '',
   };
 }
 
-export function notificationsConfigured() {
-  return Boolean(config().url);
+export function resolveConfig(config) {
+  const env = envConfig();
+  const c = config || {};
+  return {
+    kind: String(c.kind || env.kind || 'ntfy').toLowerCase(),
+    url: c.url || env.url || '',
+    chatId: c.chatId || env.chatId || '',
+    token: c.token || env.token || '',
+  };
 }
 
-export async function sendNotification({ text, title = 'Easy Drop-In' }) {
-  const { kind, url, chatId, token } = config();
-  if (!url) throw new Error('NOTIFY_WEBHOOK_URL is not configured');
+export function notificationsConfigured(config) {
+  return Boolean(resolveConfig(config).url);
+}
+
+export async function sendNotification({ text, title = 'Easy Drop-In', config }) {
+  const { kind, url, chatId, token } = resolveConfig(config);
+  if (!url) throw new Error('No notification webhook is configured');
 
   let res;
   if (kind === 'telegram') {
@@ -42,7 +53,10 @@ export async function sendNotification({ text, title = 'Easy Drop-In' }) {
   } else {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ title, text }),
     });
   }

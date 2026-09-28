@@ -4,8 +4,8 @@ A single calendar of drop-in sports across Vancouver community centres, backed b
 
 ## Structure
 
-- `frontend/` — React + Tailwind static site (Vite). Week calendar grid + list view, text search, sport filter, age-group filter, open-spots filter, centre filter (text search + "near me" via geolocation or a typed location, distance sort + radius), sign-up links, a global "Add to: Google Calendar / .ics file" toggle (Google is the default), and a "Notify me" option that asks the backend to push a webhook alert the moment online registration opens.
-- `backend/` — Node proxy for the ActiveNet API (AWS Lambda + API Gateway). Merges 7 sports calendars across all 24 centres into one feed and returns centre metadata (address + coordinates) plus per-event age group. Open-spot counts are served separately by `/spots` on demand, and `/watch` manages "notify me when registration opens" subscriptions.
+- `frontend/` — React + Tailwind static site (Vite). Week calendar grid + list view, text search, sport filter, age-group filter, open-spots filter, centre filter (text search + "near me" via geolocation or a typed location, distance sort + radius), sign-up links, a global "Add to: Google Calendar / .ics file" toggle (Google is the default), and a "Notify me" option that asks the backend to push a webhook alert the moment online registration opens. Accounts add favourites (sports/centres) and per-user notification webhooks.
+- `backend/` — Node proxy for the ActiveNet API (AWS Lambda + API Gateway). Merges 7 sports calendars across all 24 centres into one feed and returns centre metadata (address + coordinates) plus per-event age group. Open-spot counts are served separately by `/spots` on demand; `/watch` manages "notify me when registration opens" subscriptions; `/auth/*` and `/profile` handle accounts, favourites and per-user webhooks.
 
 The ActiveNet API requires a server-side session cookie and a per-session CSRF token, so the browser cannot call it directly. The backend primes a session, fetches each sports calendar, and returns one slimmed, merged list.
 
@@ -72,14 +72,17 @@ sam build && sam deploy --guided
 
 #### Registration alerts
 
-The **Notify me** button stores a watch in DynamoDB and, on AWS, creates an EventBridge Scheduler one-time schedule at the registration-open time. When it fires, the Lambda posts a webhook message with the event details and a deep link. Configure the destination on the function (`NOTIFY_KIND` = `ntfy` | `discord` | `telegram` | `generic`, plus `NOTIFY_WEBHOOK_URL`; `NOTIFY_TELEGRAM_CHAT_ID` for Telegram), e.g.:
+The **Notify me** button stores a watch in DynamoDB and, on AWS, creates an EventBridge Scheduler one-time schedule at the registration-open time. When it fires, the Lambda posts a webhook message with the event details and a deep link. Sign in to use it: the message goes to the webhook saved in your account preferences (falling back to the server default). Locally, watches are stored in `backend/.cache/watches.json` and `POST /watch/run` fires one immediately for testing.
+
+#### Accounts
+
+Email + password accounts (`/auth/signup`, `/auth/login`) use scrypt hashing and HMAC-signed session tokens; store favourites and a notification webhook via `PUT /profile`. Set the token-signing secret on deploy — as a `AuthSecret` CloudFormation parameter, the `AUTH_SECRET` GitHub secret used by the workflow, or `AUTH_SECRET` in the Lambda env:
 
 ```bash
-aws lambda update-function-configuration --function-name <fn> \
-  --environment "Variables={SPORTS_CALENDARS=46,10,9,15,11,49,5,CACHE_BUCKET=<bucket>,CACHE_KEY=feed.json,FEED_TTL_MS=1800000,WATCHES_TABLE=<table>,SCHEDULER_ROLE_ARN=<role>,NOTIFY_KIND=ntfy,NOTIFY_WEBHOOK_URL=https://ntfy.sh/<topic>}"
+openssl rand -hex 32   # generate once, then add as the AUTH_SECRET GitHub secret or set on the function
 ```
 
-Locally, watches are stored in `backend/.cache/watches.json` and `POST /watch/run` fires one immediately for testing.
+**Automated ANC sign-up is not possible with these accounts.** App accounts are separate from the City of Vancouver/ActiveNet login, and ANC's own sign-in/checkout is protected by reCAPTCHA v3, one-time codes (OTP) and payment. Nothing here stores or replays ANC credentials; the alert deep-links the user to finish the protected steps themselves.
 
 ### Frontend (GitHub Pages)
 

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { getSpots } from './anc.mjs';
 import { sendNotification } from './notify.mjs';
+import { getUser } from './auth.mjs';
 
 // "Watch" = notify the user (via webhook) the moment online registration opens
 // for a specific activity. Each watch stores a record and, in Lambda, an
@@ -191,13 +192,17 @@ function toItem(rec) {
   };
 }
 
-export async function createWatch(input, { targetArn } = {}) {
+export async function createWatch(input, { targetArn, email } = {}) {
+  const owner = String(email || '')
+    .trim()
+    .toLowerCase();
+  if (!owner) throw new Error('Sign in to create registration alerts');
   const rec = buildRecord(input);
   if (!rec) throw new Error('Invalid watch payload');
   if (rec.dueAtUtc.getTime() <= Date.now()) throw new Error('Registration is already open');
 
   const name = scheduleName(rec.watchId);
-  await putRecord({ ...toItem(rec), scheduleName: name });
+  await putRecord({ ...toItem(rec), email: owner, scheduleName: name });
 
   const roleArn = process.env.SCHEDULER_ROLE_ARN;
   const scheduled = Boolean(roleArn && targetArn);
@@ -227,9 +232,14 @@ export async function createWatch(input, { targetArn } = {}) {
   return { watchId: rec.watchId, dueAtUtc: rec.dueAtUtc.toISOString(), scheduled };
 }
 
-export async function listWatches() {
+export async function listWatches(email) {
+  const owner = String(email || '')
+    .trim()
+    .toLowerCase();
+  if (!owner) return [];
   const records = await listRecords();
   return records
+    .filter((r) => r.email === owner)
     .map((r) => ({
       watchId: r.watchId,
       activityId: r.activityId,
@@ -240,8 +250,14 @@ export async function listWatches() {
     .sort((a, b) => (a.registrationOpens < b.registrationOpens ? -1 : 1));
 }
 
-export async function deleteWatch(watchId) {
+export async function deleteWatch(watchId, email) {
+  const owner = String(email || '')
+    .trim()
+    .toLowerCase();
   const rec = await getRecord(watchId);
+  if (!rec || (owner && rec.email && rec.email !== owner)) {
+    return { watchId, deleted: false };
+  }
   if (process.env.SCHEDULER_ROLE_ARN) {
     try {
       const { DeleteScheduleCommand } = await import('@aws-sdk/client-scheduler');
@@ -260,6 +276,17 @@ export async function runWatch({ watchId }) {
   const rec = await getRecord(watchId);
   if (!rec) return { skipped: 'not-found' };
   if (rec.notified) return { skipped: 'already-notified' };
+
+  // Prefer the owner's webhook; fall back to the server default.
+  let webhook = null;
+  if (rec.email) {
+    try {
+      const user = await getUser(rec.email);
+      webhook = (user && user.webhook) || null;
+    } catch {
+      /* fall back to env default */
+    }
+  }
 
   let spotLine = '';
   try {
@@ -285,7 +312,7 @@ export async function runWatch({ watchId }) {
     .filter((line) => line !== undefined)
     .join('\n');
 
-  await sendNotification({ title: 'Easy Drop-In', text });
+  await sendNotification({ title: 'Easy Drop-In', text, config: webhook });
   await markNotified(watchId);
   return { sent: true };
 }

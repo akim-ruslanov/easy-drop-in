@@ -2,6 +2,17 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Easy Drop-In backend proxy for Vancouver community centre calendars
 
+Parameters:
+  # Long random string used to sign session tokens, e.g. `openssl rand -hex 32`.
+  # Pass at deploy time (`--parameter-overrides AuthSecret=...`) or set the
+  # AUTH_SECRET GitHub secret used by the deploy workflow. Auth is disabled
+  # while this is empty.
+  AuthSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: HMAC secret for signing session tokens
+
 Globals:
   Function:
     Timeout: 60
@@ -37,6 +48,18 @@ Resources:
         AttributeName: expiresAt
         Enabled: true
 
+  # Accounts (email key) with favourites and per-user webhook settings.
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+
   # Assumed by EventBridge Scheduler to invoke this same Lambda at the
   # registration-open time. Scoped to this stack's function.
   WatchSchedulerRole:
@@ -71,6 +94,8 @@ Resources:
           # 30 min: caps S3 writes at ~1,440/month (free tier: 2,000 PUT).
           FEED_TTL_MS: '1800000'
           WATCHES_TABLE: !Ref WatchesTable
+          USERS_TABLE: !Ref UsersTable
+          AUTH_SECRET: !Ref AuthSecret
           SCHEDULER_ROLE_ARN: !GetAtt WatchSchedulerRole.Arn
           # Notification destination, set after deploy (see README/AWS_SETUP).
           NOTIFY_KIND: ntfy
@@ -92,6 +117,13 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:Scan
               Resource: !GetAtt WatchesTable.Arn
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt UsersTable.Arn
         - Statement:
             - Effect: Allow
               Action:
@@ -137,6 +169,36 @@ Resources:
             ApiId: !Ref Api
             Path: /watch/{id}
             Method: delete
+        PostSignup:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /auth/signup
+            Method: post
+        PostLogin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /auth/login
+            Method: post
+        GetMe:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /auth/me
+            Method: get
+        PutProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /profile
+            Method: put
+        PostNotifyTest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /notify/test
+            Method: post
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -147,10 +209,12 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
           - DELETE
           - OPTIONS
         AllowHeaders:
           - Content-Type
+          - Authorization
 
 Outputs:
   ApiUrl:

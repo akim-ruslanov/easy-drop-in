@@ -29,5 +29,6 @@ jobs:
       - run: >
           sam deploy --stack-name "$STACK_NAME" --region "$AWS_REGION"
           --resolve-s3 --capabilities CAPABILITY_IAM
+          --parameter-overrides AuthSecret="${{ secrets.AUTH_SECRET }}"
           --no-confirm-changeset --no-fail-on-empty-changeset
         working-directory: backend
