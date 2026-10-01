@@ -26,9 +26,23 @@ jobs:
         with: { use-installer: true }
       - run: sam build
         working-directory: backend
-      - run: >
-          sam deploy --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          --resolve-s3 --capabilities CAPABILITY_IAM
-          --parameter-overrides AuthSecret="${{ secrets.AUTH_SECRET }}"
-          --no-confirm-changeset --no-fail-on-empty-changeset
+      - name: Deploy with SAM
         working-directory: backend
+        env:
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+        run: |
+          OVERRIDES=()
+          if [ -n "$AUTH_SECRET" ]; then
+            OVERRIDES=(--parameter-overrides "AuthSecret=$AUTH_SECRET")
+            echo "Deploying with AUTH_SECRET configured."
+          else
+            echo "AUTH_SECRET not set — deploying with accounts disabled (sign-up/login will error until it is configured)."
+          fi
+          sam deploy \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            "${OVERRIDES[@]}" \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
